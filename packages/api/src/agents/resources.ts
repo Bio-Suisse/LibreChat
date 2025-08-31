@@ -2,20 +2,23 @@ import { logger } from '@librechat/data-schemas';
 import { EModelEndpoint, EToolResources, AgentCapabilities } from 'librechat-data-provider';
 import type { AgentToolResources, TFile, AgentBaseResource } from 'librechat-data-provider';
 import type { FilterQuery, QueryOptions, ProjectionType } from 'mongoose';
-import type { IMongoFile } from '@librechat/data-schemas';
+import type { IMongoFile, IUser } from '@librechat/data-schemas';
 import type { Request as ServerRequest } from 'express';
+import type { AppConfig } from '~/types/';
 
 /**
  * Function type for retrieving files from the database
  * @param filter - MongoDB filter query for files
  * @param _sortOptions - Sorting options (currently unused)
  * @param selectFields - Field selection options
+ * @param options - Additional options including userId and agentId for access control
  * @returns Promise resolving to array of files
  */
 export type TGetFiles = (
   filter: FilterQuery<IMongoFile>,
   _sortOptions: ProjectionType<IMongoFile> | null | undefined,
   selectFields: QueryOptions<IMongoFile> | null | undefined,
+  options?: { userId?: string; agentId?: string },
 ) => Promise<Array<TFile>>;
 
 /**
@@ -132,7 +135,8 @@ const categorizeFileForToolResources = ({
  * 4. Prevents duplicate files across all sources
  *
  * @param params - Parameters object
- * @param params.req - Express request object containing app configuration
+ * @param params.req - Express request object
+ * @param params.appConfig - Application configuration object
  * @param params.getFiles - Function to retrieve files from database
  * @param params.requestFileSet - Set of file IDs from the current request
  * @param params.attachments - Promise resolving to array of attachment files
@@ -141,16 +145,20 @@ const categorizeFileForToolResources = ({
  */
 export const primeResources = async ({
   req,
+  appConfig,
   getFiles,
   requestFileSet,
   attachments: _attachments,
   tool_resources: _tool_resources,
+  agentId,
 }: {
-  req: ServerRequest;
+  req: ServerRequest & { user?: IUser };
+  appConfig: AppConfig;
   requestFileSet: Set<string>;
   attachments: Promise<Array<TFile | null>> | undefined;
   tool_resources: AgentToolResources | undefined;
   getFiles: TGetFiles;
+  agentId?: string;
 }): Promise<{
   attachments: Array<TFile | undefined> | undefined;
   tool_resources: AgentToolResources | undefined;
@@ -194,9 +202,9 @@ export const primeResources = async ({
       }
     }
 
-    const isOCREnabled = (req.app.locals?.[EModelEndpoint.agents]?.capabilities ?? []).includes(
-      AgentCapabilities.ocr,
-    );
+    const isOCREnabled = (
+      appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities ?? []
+    ).includes(AgentCapabilities.ocr);
 
     if (tool_resources[EToolResources.ocr]?.file_ids && isOCREnabled) {
       const context = await getFiles(
@@ -205,6 +213,7 @@ export const primeResources = async ({
         },
         {},
         {},
+        { userId: req.user?.id, agentId },
       );
 
       for (const file of context) {
