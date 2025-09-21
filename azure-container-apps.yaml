@@ -1,0 +1,546 @@
+# Azure Container Apps Konfiguration für LibreChat
+# Diese Datei definiert die Container Apps für Azure Container Apps Service
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: librechat-api
+  labels:
+    app: librechat-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: librechat-api
+  template:
+    metadata:
+      labels:
+        app: librechat-api
+    spec:
+      containers:
+      - name: librechat-api
+        image: librechatacr1758465933.azurecr.io/librechat-api:latest
+        ports:
+        - containerPort: 3080
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3080"
+        - name: MONGO_URI
+          value: "mongodb://mongodb:27017/LibreChat"
+        - name: MEILI_HOST
+          value: "http://meilisearch:7700"
+        - name: RAG_PORT
+          value: "8000"
+        - name: RAG_API_URL
+          value: "http://rag-api:8000"
+        - name: MEILI_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: meili-master-key
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: librechat-config
+          mountPath: /app/librechat.yaml
+          subPath: librechat.yaml
+        - name: librechat-images
+          mountPath: /app/client/public/images
+        - name: librechat-uploads
+          mountPath: /app/uploads
+        - name: librechat-logs
+          mountPath: /app/api/logs
+      volumes:
+      - name: librechat-config
+        configMap:
+          name: librechat-config
+      - name: librechat-images
+        persistentVolumeClaim:
+          claimName: librechat-images-pvc
+      - name: librechat-uploads
+        persistentVolumeClaim:
+          claimName: librechat-uploads-pvc
+      - name: librechat-logs
+        persistentVolumeClaim:
+          claimName: librechat-logs-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: librechat-api-service
+spec:
+  selector:
+    app: librechat-api
+  ports:
+  - port: 3080
+    targetPort: 3080
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: librechat-client
+  labels:
+    app: librechat-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: librechat-client
+  template:
+    metadata:
+      labels:
+        app: librechat-client
+    spec:
+      containers:
+      - name: librechat-client
+        image: librechatacr1758465933.azurecr.io/nginx:1.27.0-alpine
+        ports:
+        - containerPort: 80
+        - containerPort: 443
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d/default.conf
+          subPath: default.conf
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: librechat-client-service
+spec:
+  selector:
+    app: librechat-client
+  ports:
+  - port: 80
+    targetPort: 80
+  - port: 443
+    targetPort: 443
+  type: LoadBalancer
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: librechatacr1758465933.azurecr.io/mongo:latest
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: mongo-username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: mongo-password
+        volumeMounts:
+        - name: mongodb-data
+          mountPath: /data/db
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      volumes:
+      - name: mongodb-data
+        persistentVolumeClaim:
+          claimName: mongodb-data-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-service
+spec:
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+    targetPort: 27017
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meilisearch
+  labels:
+    app: meilisearch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meilisearch
+  template:
+    metadata:
+      labels:
+        app: meilisearch
+    spec:
+      containers:
+      - name: meilisearch
+        image: librechatacr1758465933.azurecr.io/meilisearch:v1.12.3
+        ports:
+        - containerPort: 7700
+        env:
+        - name: MEILI_HOST
+          value: "http://meilisearch:7700"
+        - name: MEILI_NO_ANALYTICS
+          value: "true"
+        - name: MEILI_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: meili-master-key
+        volumeMounts:
+        - name: meilisearch-data
+          mountPath: /meili_data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+      volumes:
+      - name: meilisearch-data
+        persistentVolumeClaim:
+          claimName: meilisearch-data-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meilisearch-service
+spec:
+  selector:
+    app: meilisearch
+  ports:
+  - port: 7700
+    targetPort: 7700
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vectordb
+  labels:
+    app: vectordb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vectordb
+  template:
+    metadata:
+      labels:
+        app: vectordb
+    spec:
+      containers:
+      - name: vectordb
+        image: librechatacr1758465933.azurecr.io/pgvector:0.8.0-pg15-trixie
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: "mydatabase"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: postgres-username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: librechat-secrets
+              key: postgres-password
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: postgres-data-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vectordb-service
+spec:
+  selector:
+    app: vectordb
+  ports:
+  - port: 5432
+    targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-api
+  labels:
+    app: rag-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-api
+  template:
+    metadata:
+      labels:
+        app: rag-api
+    spec:
+      containers:
+      - name: rag-api
+        image: librechatacr1758465933.azurecr.io/librechat-rag-api:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DB_HOST
+          value: "vectordb"
+        - name: RAG_PORT
+          value: "8000"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-api-service
+spec:
+  selector:
+    app: rag-api
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+
+---
+# Persistent Volume Claims für Azure Files
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: azurefile-csi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: meilisearch-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: azurefile-csi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: azurefile-csi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: librechat-images-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: azurefile-csi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: librechat-uploads-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: azurefile-csi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: librechat-logs-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: azurefile-csi
+
+---
+# Secrets für sensible Daten
+apiVersion: v1
+kind: Secret
+metadata:
+  name: librechat-secrets
+type: Opaque
+stringData:
+  mongo-username: "admin"
+  mongo-password: "your-secure-mongo-password"
+  meili-master-key: "your-secure-meili-master-key"
+  postgres-username: "myuser"
+  postgres-password: "your-secure-postgres-password"
+
+---
+# ConfigMap für LibreChat Konfiguration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: librechat-config
+data:
+  librechat.yaml: |
+    version: 1.2.1
+    cache: true
+    interface:
+      customWelcome: 'Willkommen bei LibreChat!'
+      fileSearch: true
+      endpointsMenu: true
+      modelSelect: true
+      parameters: true
+      sidePanel: true
+      presets: true
+      prompts: true
+      bookmarks: true
+      multiConvo: true
+      agents: true
+      peoplePicker:
+        users: true
+        groups: true
+        roles: true
+      marketplace:
+        use: false
+      fileCitations: true
+    registration:
+      socialLogins: ['github', 'google', 'discord', 'openid', 'facebook', 'apple', 'saml']
+    endpoints:
+      custom:
+        - name: 'groq'
+          apiKey: '${GROQ_API_KEY}'
+          baseURL: 'https://api.groq.com/openai/v1/'
+          models:
+            default:
+              [
+                'llama3-70b-8192',
+                'llama3-8b-8192',
+                'llama2-70b-4096',
+                'mixtral-8x7b-32768',
+                'gemma-7b-it',
+              ]
+            fetch: false
+          titleConvo: true
+          titleModel: 'mixtral-8x7b-32768'
+          modelDisplayLabel: 'groq'
+
+---
+# ConfigMap für Nginx Konfiguration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name _;
+        
+        location / {
+            proxy_pass http://librechat-api-service:3080;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        location /api {
+            proxy_pass http://librechat-api-service:3080;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+
