@@ -132,3 +132,15 @@ az containerapp create \
         MEILI_HOST=http://meilisearch:7700 \
         RAG_PORT=8000 \
         RAG_API_URL=http://rag-api:8000
+
+# ------------------------------------------------------------
+# STEP 11: Create Monitoring Container App
+# ------------------------------------------------------------
+az containerapp update \
+    --name $LIBRECHAT_API_APP_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --min-replicas 1 \
+    --max-replicas 3 \
+    --cpu 0.5 \
+    --memory 1.0Gi
+    
