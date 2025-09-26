@@ -301,10 +301,10 @@ az containerapp create \
     --env-vars \
         HOST=0.0.0.0 \
         PORT=3080 \
-        MONGO_URI=mongodb://mongodb:27017/LibreChat \
-        MEILI_HOST=http://meilisearch:7700 \
+        MONGO_URI=mongodb://$MONGO_APP_NAME:27017/LibreChat \
+        MEILI_HOST=http://$MEILISEARCH_APP_NAME:7700 \
         RAG_PORT=8000 \
-        RAG_API_URL=http://rag-api:8000
+        RAG_API_URL=http://$RAG_API_APP_NAME:8000
 
 # ------------------------------------------------------------
 # STEP 12: Create Monitoring Container App
