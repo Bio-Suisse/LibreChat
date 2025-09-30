@@ -78,36 +78,33 @@ if [[ "${1:-}" == "--build" ]]; then
     docker build -t $ACR_LOGIN_SERVER/librechat:latest .
     docker push $ACR_LOGIN_SERVER/librechat:latest
     
-    # Build and push RAG API (if packages/api exists)
-    if [[ -d "packages/api" ]]; then
-        echo "🤖 Building RAG API image..."
-        docker build -t $ACR_LOGIN_SERVER/rag-api:latest ./packages/api
-        docker push $ACR_LOGIN_SERVER/rag-api:latest
-    else
-        echo "⚠️  packages/api directory not found, skipping RAG API build"
-    fi
+    # Note: RAG API uses the same LibreChat image
+    echo "ℹ️  RAG API will use the same LibreChat image (no separate build needed)"
     
     echo "✅ Container images built and pushed successfully!"
     echo "💡 You can now update container apps to use these images:"
     echo "   - LibreChat: $ACR_LOGIN_SERVER/librechat:latest"
-    echo "   - RAG API: $ACR_LOGIN_SERVER/rag-api:latest"
+    echo "   - RAG API: $ACR_LOGIN_SERVER/librechat:latest (same image)"
     
     # Ask if user wants to update container apps
     read -p "Do you want to update container apps with new images? (yes/no): " update_apps
     if [[ $update_apps == "yes" ]]; then
         echo "🔄 Updating LibreChat API container app..."
+        # Get ACR credentials
+        ACR_USERNAME=$(az acr credential show --name $ACR_NAME --resource-group $RESOURCE_GROUP --query username -o tsv)
+        ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --resource-group $RESOURCE_GROUP --query "passwords[0].value" -o tsv)
+        
+        # Update LibreChat API with ACR image (Azure will handle registry authentication)
         az containerapp update \
             --name $LIBRECHAT_API_APP_NAME \
             --resource-group $RESOURCE_GROUP \
             --image $ACR_LOGIN_SERVER/librechat:latest
         
-        if [[ -d "packages/api" ]]; then
-            echo "🔄 Updating RAG API container app..."
-            az containerapp update \
-                --name $RAG_API_APP_NAME \
-                --resource-group $RESOURCE_GROUP \
-                --image $ACR_LOGIN_SERVER/rag-api:latest
-        fi
+        echo "🔄 Updating RAG API container app..."
+        az containerapp update \
+            --name $RAG_API_APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_LOGIN_SERVER/librechat:latest
         
         echo "✅ Container apps updated with new images!"
     fi
