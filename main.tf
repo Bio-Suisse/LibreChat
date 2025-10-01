@@ -29,6 +29,35 @@ variable "base_name" {
   default     = "bioaiassist"
 }
 
+// Sicherheitsvariablen für Passwörter
+variable "mongo_password" {
+  description = "MongoDB root password"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "meili_master_key" {
+  description = "Meilisearch master key"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "postgres_password" {
+  description = "PostgreSQL password"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API Key for LibreChat"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
 // Lokale Variablen, die aus den Input-Variablen abgeleitet werden.
 locals {
   resource_group_name         = "${var.base_name}-rg"
@@ -37,6 +66,27 @@ locals {
   container_app_environment_name = "${var.base_name}-env"
   storage_account_name        = lower(replace(var.base_name, "-", "")) // Storage names need to be lowercase alphanumeric
   key_vault_name              = "${var.base_name}kv"
+  
+  // Generiere sichere Passwörter falls nicht angegeben
+  mongo_password_final        = var.mongo_password != null ? var.mongo_password : "Mongo${random_password.mongo_password.result}"
+  meili_master_key_final      = var.meili_master_key != null ? var.meili_master_key : "Meili${random_password.meili_key.result}"
+  postgres_password_final     = var.postgres_password != null ? var.postgres_password : "Postgres${random_password.postgres_password.result}"
+}
+
+// Zufällige Passwörter generieren falls keine angegeben werden
+resource "random_password" "mongo_password" {
+  length  = 16
+  special = true
+}
+
+resource "random_password" "meili_key" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "postgres_password" {
+  length  = 16
+  special = true
 }
 
 // =========== RESOURCE DEFINITIONS ===========
@@ -81,6 +131,25 @@ resource "azurerm_storage_account" "main" {
   account_replication_type = "LRS"
 }
 
+# Storage Shares für persistente Daten
+resource "azurerm_storage_share" "mongo_data" {
+  name                 = "mongo-data"
+  storage_account_name = azurerm_storage_account.main.name
+  quota                = 10
+}
+
+resource "azurerm_storage_share" "postgres_data" {
+  name                 = "postgres-data"
+  storage_account_name = azurerm_storage_account.main.name
+  quota                = 10
+}
+
+resource "azurerm_storage_share" "meili_data" {
+  name                 = "meili-data"
+  storage_account_name = azurerm_storage_account.main.name
+  quota                = 5
+}
+
 # STEP 6: Create Azure Key Vault and Secrets
 resource "azurerm_key_vault" "main" {
   name                = local.key_vault_name
@@ -104,19 +173,25 @@ data "azurerm_client_config" "current" {}
 
 resource "azurerm_key_vault_secret" "mongo_password" {
   name         = "mongo-password"
-  value        = "YourStrongMongoPassword123!" // ÄNDERE DIESEN WERT!
+  value        = local.mongo_password_final
   key_vault_id = azurerm_key_vault.main.id
 }
 
 resource "azurerm_key_vault_secret" "meili_master_key" {
   name         = "meili-master-key"
-  value        = "YourStrongMeiliMasterKey456!" // ÄNDERE DIESEN WERT!
+  value        = local.meili_master_key_final
   key_vault_id = azurerm_key_vault.main.id
 }
 
 resource "azurerm_key_vault_secret" "postgres_password" {
   name         = "postgres-password"
-  value        = "YourStrongPostgresPassword789!" // ÄNDERE DIESEN WERT!
+  value        = local.postgres_password_final
+  key_vault_id = azurerm_key_vault.main.id
+}
+
+resource "azurerm_key_vault_secret" "openai_api_key" {
+  name         = "openai-api-key"
+  value        = var.openai_api_key
   key_vault_id = azurerm_key_vault.main.id
 }
 
@@ -156,11 +231,21 @@ resource "azurerm_container_app" "mongo" {
         secret_name = "mongo-root-password"
       }
     }
+    
+    volume {
+      name         = "mongo-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_storage_share.mongo_data.name
+    }
   }
 
   ingress {
-    internal_only = true
-    target_port   = 27017
+    external_enabled = false
+    target_port      = 27017
+    traffic_weight {
+      percentage = 100
+      latest_revision = true
+    }
   }
 }
 
@@ -197,11 +282,21 @@ resource "azurerm_container_app" "meilisearch" {
         secret_name = "meili-master-key-secret"
       }
     }
+    
+    volume {
+      name         = "meili-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_storage_share.meili_data.name
+    }
   }
 
   ingress {
-    internal_only = true
-    target_port   = 7700
+    external_enabled = false
+    target_port      = 7700
+    traffic_weight {
+      percentage = 100
+      latest_revision = true
+    }
   }
 }
 
@@ -242,11 +337,21 @@ resource "azurerm_container_app" "postgres" {
         secret_name = "postgres-password-secret"
       }
     }
+    
+    volume {
+      name         = "postgres-data"
+      storage_type = "AzureFile"
+      storage_name = azurerm_storage_share.postgres_data.name
+    }
   }
 
   ingress {
-    internal_only = true
-    target_port   = 5432
+    external_enabled = false
+    target_port      = 5432
+    traffic_weight {
+      percentage = 100
+      latest_revision = true
+    }
   }
 }
 
@@ -266,7 +371,19 @@ resource "azurerm_container_app" "rag_api" {
       
       env {
         name  = "DB_HOST"
-        value = "vectordb"
+        value = "bio-ai-postgres"  # Korrigierter Service-Name
+      }
+      env {
+        name  = "DB_PORT"
+        value = "5432"
+      }
+      env {
+        name  = "DB_NAME"
+        value = "mydatabase"
+      }
+      env {
+        name  = "DB_USER"
+        value = "myuser"
       }
       env {
         name  = "RAG_PORT"
@@ -276,8 +393,12 @@ resource "azurerm_container_app" "rag_api" {
   }
 
   ingress {
-    internal_only = true
-    target_port   = 8000
+    external_enabled = false
+    target_port      = 8000
+    traffic_weight {
+      percentage = 100
+      latest_revision = true
+    }
   }
 }
 
@@ -287,6 +408,16 @@ resource "azurerm_container_app" "librechat_api" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
   revision_mode                = "Single"
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  secret {
+    name = "openai-api-key-secret"
+    key_vault_secret_id = azurerm_key_vault_secret.openai_api_key.id
+    identity = "SystemAssigned"
+  }
 
   template {
     min_replicas = 1
@@ -298,18 +429,56 @@ resource "azurerm_container_app" "librechat_api" {
       cpu    = 0.5
       memory = "1.0Gi"
 
-      env { name = "HOST", value = "0.0.0.0" }
-      env { name = "PORT", value = "3080" }
-      env { name = "MONGO_URI", value = "mongodb://admin:${azurerm_key_vault_secret.mongo_password.value}@${azurerm_container_app.mongo.name}:27017/LibreChat"}
-      env { name = "MEILI_HOST", value = "http://${azurerm_container_app.meilisearch.name}:7700" }
-      env { name = "RAG_PORT", value = "8000" }
-      env { name = "RAG_API_URL", value = "http://${azurerm_container_app.rag_api.name}:8000" }
+      env {
+        name  = "HOST"
+        value = "0.0.0.0"
+      }
+      env {
+        name  = "PORT"
+        value = "3080"
+      }
+      env {
+        name  = "NODE_ENV"
+        value = "production"
+      }
+      env {
+        name  = "MONGO_URI"
+        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb:27017/LibreChat"
+      }
+      env {
+        name  = "MEILI_HOST"
+        value = "http://bio-ai-meilisearch:7700"
+      }
+      env {
+        name  = "MEILI_HTTP_ADDR"
+        value = "bio-ai-meilisearch:7700"
+      }
+      env {
+        name  = "RAG_API_URL"
+        value = "http://bio-ai-rag-api:8000"
+      }
+      env {
+        name        = "OPENAI_API_KEY"
+        secret_name = "openai-api-key-secret"
+      }
+      env {
+        name  = "DOMAIN_CLIENT"
+        value = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+      }
+      env {
+        name  = "DOMAIN_SERVER"
+        value = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+      }
     }
   }
 
   ingress {
     external_enabled = true
     target_port      = 3080
+    traffic_weight {
+      percentage = 100
+      latest_revision = true
+    }
   }
 }
 
@@ -336,4 +505,38 @@ resource "azurerm_key_vault_access_policy" "postgres" {
   object_id    = azurerm_container_app.postgres.identity[0].principal_id
 
   secret_permissions = ["Get"]
+}
+
+resource "azurerm_key_vault_access_policy" "librechat" {
+  key_vault_id = azurerm_key_vault.main.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_container_app.librechat_api.identity[0].principal_id
+
+  secret_permissions = ["Get"]
+}
+
+# =========== OUTPUTS ===========
+output "resource_group_name" {
+  description = "Name of the created resource group"
+  value       = azurerm_resource_group.main.name
+}
+
+output "container_app_environment_name" {
+  description = "Name of the container app environment"
+  value       = azurerm_container_app_environment.main.name
+}
+
+output "librechat_url" {
+  description = "URL of the LibreChat application"
+  value       = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+}
+
+output "storage_account_name" {
+  description = "Name of the storage account"
+  value       = azurerm_storage_account.main.name
+}
+
+output "key_vault_name" {
+  description = "Name of the key vault"
+  value       = azurerm_key_vault.main.name
 }

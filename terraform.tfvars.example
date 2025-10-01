@@ -1,0 +1,14 @@
+# Terraform Variables Example
+# Kopiere diese Datei zu terraform.tfvars und fülle die Werte aus
+
+# Basis-Konfiguration
+location = "Switzerland North"
+base_name = "bioaiassist"
+
+# Sicherheitsvariablen (optional - werden automatisch generiert falls nicht angegeben)
+# mongo_password = "DeinSicheresMongoPasswort123!"
+# meili_master_key = "DeinSichererMeiliMasterKey456!"
+# postgres_password = "DeinSicheresPostgresPasswort789!"
+
+# OpenAI API Key (erforderlich für LibreChat)
+openai_api_key = "sk-your-openai-api-key-here"
