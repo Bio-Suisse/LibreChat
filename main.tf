@@ -114,15 +114,42 @@ resource "azurerm_log_analytics_workspace" "main" {
   sku                 = "PerGB2018"
 }
 
-# STEP 4: Create Azure Container App Environment
+# STEP 4: Create VNet for Container Apps
+resource "azurerm_virtual_network" "main" {
+  name                = "${var.base_name}-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+}
+
+resource "azurerm_subnet" "container_apps" {
+  name                 = "${var.base_name}-container-apps-subnet"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.0.1.0/24"]
+  
+  delegation {
+    name = "Microsoft.App.environments"
+    service_delegation {
+      name    = "Microsoft.App/environments"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action",
+      ]
+    }
+  }
+}
+
+# STEP 5: Create Azure Container App Environment with VNet
 resource "azurerm_container_app_environment" "main" {
   name                       = local.container_app_environment_name
   resource_group_name        = azurerm_resource_group.main.name
   location                   = azurerm_resource_group.main.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  infrastructure_subnet_id   = azurerm_subnet.container_apps.id
+  internal_load_balancer_enabled = true
 }
 
-# STEP 5: Create Azure Storage Account
+# STEP 6: Create Azure Storage Account
 resource "azurerm_storage_account" "main" {
   name                     = local.storage_account_name
   resource_group_name      = azurerm_resource_group.main.name
@@ -150,7 +177,7 @@ resource "azurerm_storage_share" "meili_data" {
   quota                = 5
 }
 
-# STEP 6: Create Azure Key Vault and Secrets
+# STEP 7: Create Azure Key Vault and Secrets
 resource "azurerm_key_vault" "main" {
   name                = local.key_vault_name
   resource_group_name = azurerm_resource_group.main.name
@@ -198,7 +225,7 @@ resource "azurerm_key_vault_secret" "openai_api_key" {
 
 # =========== CONTAINER APPS DEPLOYMENT ===========
 
-# STEP 7: Create MongoDB Container App
+# STEP 8: Create MongoDB Container App
 resource "azurerm_container_app" "mongo" {
   name                         = "bio-ai-mongodb"
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -230,6 +257,28 @@ resource "azurerm_container_app" "mongo" {
         name        = "MONGO_INITDB_ROOT_PASSWORD"
         secret_name = "mongo-root-password"
       }
+
+      liveness_probe {
+        http_get {
+          path = "/"
+          port = 27017
+        }
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 3
+      }
+
+      readiness_probe {
+        http_get {
+          path = "/"
+          port = 27017
+        }
+        initial_delay_seconds = 10
+        period_seconds        = 5
+        timeout_seconds       = 3
+        failure_threshold     = 3
+      }
     }
     
     volume {
@@ -249,7 +298,7 @@ resource "azurerm_container_app" "mongo" {
   }
 }
 
-# STEP 8: Create Meilisearch Container App
+# STEP 9: Create Meilisearch Container App
 resource "azurerm_container_app" "meilisearch" {
   name                         = "bio-ai-meilisearch"
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -281,6 +330,28 @@ resource "azurerm_container_app" "meilisearch" {
         name        = "MEILI_MASTER_KEY"
         secret_name = "meili-master-key-secret"
       }
+
+      liveness_probe {
+        http_get {
+          path = "/health"
+          port = 7700
+        }
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 3
+      }
+
+      readiness_probe {
+        http_get {
+          path = "/health"
+          port = 7700
+        }
+        initial_delay_seconds = 10
+        period_seconds        = 5
+        timeout_seconds       = 3
+        failure_threshold     = 3
+      }
     }
     
     volume {
@@ -300,7 +371,7 @@ resource "azurerm_container_app" "meilisearch" {
   }
 }
 
-# STEP 9: Create Postgres Container App
+# STEP 10: Create Postgres Container App
 resource "azurerm_container_app" "postgres" {
   name                         = "bio-ai-postgres"
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -336,6 +407,26 @@ resource "azurerm_container_app" "postgres" {
         name = "POSTGRES_PASSWORD"
         secret_name = "postgres-password-secret"
       }
+
+      liveness_probe {
+        exec {
+          command = ["pg_isready", "-U", "myuser", "-d", "mydatabase"]
+        }
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 3
+      }
+
+      readiness_probe {
+        exec {
+          command = ["pg_isready", "-U", "myuser", "-d", "mydatabase"]
+        }
+        initial_delay_seconds = 10
+        period_seconds        = 5
+        timeout_seconds       = 3
+        failure_threshold     = 3
+      }
     }
     
     volume {
@@ -355,12 +446,22 @@ resource "azurerm_container_app" "postgres" {
   }
 }
 
-# STEP 10: Create RAG API Container App
+# STEP 11: Create RAG API Container App
 resource "azurerm_container_app" "rag_api" {
   name                         = "bio-ai-rag-api"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
   revision_mode                = "Single"
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  secret {
+    name = "postgres-password-secret"
+    key_vault_secret_id = azurerm_key_vault_secret.postgres_password.id
+    identity = "SystemAssigned"
+  }
 
   template {
     container {
@@ -371,7 +472,7 @@ resource "azurerm_container_app" "rag_api" {
       
       env {
         name  = "DB_HOST"
-        value = "bio-ai-postgres"  # Korrigierter Service-Name
+        value = azurerm_container_app.postgres.latest_revision_fqdn
       }
       env {
         name  = "DB_PORT"
@@ -386,8 +487,34 @@ resource "azurerm_container_app" "rag_api" {
         value = "myuser"
       }
       env {
+        name        = "DB_PASSWORD"
+        secret_name = "postgres-password-secret"
+      }
+      env {
         name  = "RAG_PORT"
         value = "8000"
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/health"
+          port = 8000
+        }
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 3
+      }
+
+      readiness_probe {
+        http_get {
+          path = "/health"
+          port = 8000
+        }
+        initial_delay_seconds = 10
+        period_seconds        = 5
+        timeout_seconds       = 3
+        failure_threshold     = 3
       }
     }
   }
@@ -402,7 +529,7 @@ resource "azurerm_container_app" "rag_api" {
   }
 }
 
-# STEP 11 & 12: Create LibreChat API Container App
+# STEP 12: Create LibreChat API Container App
 resource "azurerm_container_app" "librechat_api" {
   name                         = "bio-ai-librechat-api"
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -419,6 +546,18 @@ resource "azurerm_container_app" "librechat_api" {
     identity = "SystemAssigned"
   }
 
+  secret {
+    name = "mongo-password-secret"
+    key_vault_secret_id = azurerm_key_vault_secret.mongo_password.id
+    identity = "SystemAssigned"
+  }
+
+  secret {
+    name = "meili-master-key-secret"
+    key_vault_secret_id = azurerm_key_vault_secret.meili_master_key.id
+    identity = "SystemAssigned"
+  }
+
   template {
     min_replicas = 1
     max_replicas = 3
@@ -429,6 +568,7 @@ resource "azurerm_container_app" "librechat_api" {
       cpu    = 0.5
       memory = "1.0Gi"
 
+      # Basic Configuration
       env {
         name  = "HOST"
         value = "0.0.0.0"
@@ -441,26 +581,40 @@ resource "azurerm_container_app" "librechat_api" {
         name  = "NODE_ENV"
         value = "production"
       }
+
+      # MongoDB Configuration
       env {
         name  = "MONGO_URI"
-        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb:27017/LibreChat"
+        value = "mongodb://admin:${local.mongo_password_final}@${azurerm_container_app.mongo.latest_revision_fqdn}:27017/LibreChat"
       }
+
+      # Meilisearch Configuration
       env {
         name  = "MEILI_HOST"
-        value = "http://bio-ai-meilisearch:7700"
+        value = "http://${azurerm_container_app.meilisearch.latest_revision_fqdn}:7700"
       }
       env {
         name  = "MEILI_HTTP_ADDR"
-        value = "bio-ai-meilisearch:7700"
+        value = "${azurerm_container_app.meilisearch.latest_revision_fqdn}:7700"
       }
       env {
-        name  = "RAG_API_URL"
-        value = "http://bio-ai-rag-api:8000"
+        name        = "MEILI_MASTER_KEY"
+        secret_name = "meili-master-key-secret"
       }
+
+      # RAG API Configuration
+      env {
+        name  = "RAG_API_URL"
+        value = "http://${azurerm_container_app.rag_api.latest_revision_fqdn}:8000"
+      }
+
+      # OpenAI Configuration
       env {
         name        = "OPENAI_API_KEY"
         secret_name = "openai-api-key-secret"
       }
+
+      # Domain Configuration
       env {
         name  = "DOMAIN_CLIENT"
         value = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
@@ -468,6 +622,46 @@ resource "azurerm_container_app" "librechat_api" {
       env {
         name  = "DOMAIN_SERVER"
         value = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+      }
+
+      # Additional LibreChat Configuration
+      env {
+        name  = "ALLOW_REGISTRATION"
+        value = "true"
+      }
+      env {
+        name  = "ALLOW_SOCIAL_LOGIN"
+        value = "false"
+      }
+      env {
+        name  = "APP_TITLE"
+        value = "Bio Suisse AI Assistant"
+      }
+      env {
+        name  = "DEBUG_CONSOLE"
+        value = "false"
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/api/health"
+          port = 3080
+        }
+        initial_delay_seconds = 60
+        period_seconds        = 30
+        timeout_seconds       = 10
+        failure_threshold     = 3
+      }
+
+      readiness_probe {
+        http_get {
+          path = "/api/health"
+          port = 3080
+        }
+        initial_delay_seconds = 30
+        period_seconds        = 10
+        timeout_seconds       = 5
+        failure_threshold     = 3
       }
     }
   }
@@ -503,6 +697,14 @@ resource "azurerm_key_vault_access_policy" "postgres" {
   key_vault_id = azurerm_key_vault.main.id
   tenant_id    = data.azurerm_client_config.current.tenant_id
   object_id    = azurerm_container_app.postgres.identity[0].principal_id
+
+  secret_permissions = ["Get"]
+}
+
+resource "azurerm_key_vault_access_policy" "rag_api" {
+  key_vault_id = azurerm_key_vault.main.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_container_app.rag_api.identity[0].principal_id
 
   secret_permissions = ["Get"]
 }
