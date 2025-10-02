@@ -12,7 +12,12 @@ terraform {
 }
 
 provider "azurerm" {
-  features {}
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
+  }
+  skip_provider_registration = true
 }
 
 // =========== VARIABLES ===========
@@ -65,7 +70,7 @@ locals {
   log_analytics_workspace_name = "${var.base_name}-logs"
   container_app_environment_name = "${var.base_name}-env"
   storage_account_name        = lower(replace(var.base_name, "-", "")) // Storage names need to be lowercase alphanumeric
-  key_vault_name              = "${var.base_name}kv"
+  key_vault_name              = "${var.base_name}kv${random_id.kv_suffix.hex}"
   
   // Generiere sichere Passwörter falls nicht angegeben
   mongo_password_final        = var.mongo_password != null ? var.mongo_password : "Mongo${random_password.mongo_password.result}"
@@ -87,6 +92,10 @@ resource "random_password" "meili_key" {
 resource "random_password" "postgres_password" {
   length  = 16
   special = true
+}
+
+resource "random_id" "kv_suffix" {
+  byte_length = 4
 }
 
 // =========== RESOURCE DEFINITIONS ===========
@@ -114,42 +123,43 @@ resource "azurerm_log_analytics_workspace" "main" {
   sku                 = "PerGB2018"
 }
 
-# STEP 4: Create VNet for Container Apps
-resource "azurerm_virtual_network" "main" {
-  name                = "${var.base_name}-vnet"
-  address_space       = ["10.0.0.0/16"]
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-}
-
-resource "azurerm_subnet" "container_apps" {
-  name                 = "${var.base_name}-container-apps-subnet"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.0.1.0/24"]
-  
-  delegation {
-    name = "Microsoft.App.environments"
-    service_delegation {
-      name    = "Microsoft.App/environments"
-      actions = [
-        "Microsoft.Network/virtualNetworks/subnets/join/action",
-      ]
-    }
-  }
-}
-
-# STEP 5: Create Azure Container App Environment with VNet
+# STEP 4: Create Azure Container App Environment (ohne VNet für einfachere Konfiguration)
 resource "azurerm_container_app_environment" "main" {
   name                       = local.container_app_environment_name
   resource_group_name        = azurerm_resource_group.main.name
   location                   = azurerm_resource_group.main.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
-  infrastructure_subnet_id   = azurerm_subnet.container_apps.id
-  internal_load_balancer_enabled = true
 }
 
-# STEP 6: Create Azure Storage Account
+# Storage Registrations für Container App Environment
+resource "azurerm_container_app_environment_storage" "mongo_data" {
+  name                         = "mongo-data"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  account_name                 = azurerm_storage_account.main.name
+  share_name                   = azurerm_storage_share.mongo_data.name
+  access_key                   = azurerm_storage_account.main.primary_access_key
+  access_mode                  = "ReadWrite"
+}
+
+resource "azurerm_container_app_environment_storage" "postgres_data" {
+  name                         = "postgres-data"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  account_name                 = azurerm_storage_account.main.name
+  share_name                   = azurerm_storage_share.postgres_data.name
+  access_key                   = azurerm_storage_account.main.primary_access_key
+  access_mode                  = "ReadWrite"
+}
+
+resource "azurerm_container_app_environment_storage" "meili_data" {
+  name                         = "meili-data"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  account_name                 = azurerm_storage_account.main.name
+  share_name                   = azurerm_storage_share.meili_data.name
+  access_key                   = azurerm_storage_account.main.primary_access_key
+  access_mode                  = "ReadWrite"
+}
+
+# STEP 5: Create Azure Storage Account
 resource "azurerm_storage_account" "main" {
   name                     = local.storage_account_name
   resource_group_name      = azurerm_resource_group.main.name
@@ -177,7 +187,7 @@ resource "azurerm_storage_share" "meili_data" {
   quota                = 5
 }
 
-# STEP 7: Create Azure Key Vault and Secrets
+# STEP 6: Create Azure Key Vault and Secrets
 resource "azurerm_key_vault" "main" {
   name                = local.key_vault_name
   resource_group_name = azurerm_resource_group.main.name
@@ -238,11 +248,13 @@ resource "azurerm_container_app" "mongo" {
 
   secret {
     name      = "mongo-root-password"
-    key_vault_secret_id = azurerm_key_vault_secret.mongo_password.id
-    identity  = "SystemAssigned"
+    value     = local.mongo_password_final
   }
 
   template {
+    max_replicas = 10
+    min_replicas = 1
+    
     container {
       name   = "mongodb"
       image  = "mongo:latest"
@@ -258,27 +270,6 @@ resource "azurerm_container_app" "mongo" {
         secret_name = "mongo-root-password"
       }
 
-      liveness_probe {
-        http_get {
-          path = "/"
-          port = 27017
-        }
-        initial_delay_seconds = 30
-        period_seconds        = 10
-        timeout_seconds       = 5
-        failure_threshold     = 3
-      }
-
-      readiness_probe {
-        http_get {
-          path = "/"
-          port = 27017
-        }
-        initial_delay_seconds = 10
-        period_seconds        = 5
-        timeout_seconds       = 3
-        failure_threshold     = 3
-      }
     }
     
     volume {
@@ -311,11 +302,13 @@ resource "azurerm_container_app" "meilisearch" {
 
   secret {
     name = "meili-master-key-secret"
-    key_vault_secret_id = azurerm_key_vault_secret.meili_master_key.id
-    identity = "SystemAssigned"
+    value = local.meili_master_key_final
   }
 
   template {
+    max_replicas = 10
+    min_replicas = 1
+    
     container {
       name   = "meilisearch"
       image  = "getmeili/meilisearch:v1.12.3"
@@ -331,27 +324,6 @@ resource "azurerm_container_app" "meilisearch" {
         secret_name = "meili-master-key-secret"
       }
 
-      liveness_probe {
-        http_get {
-          path = "/health"
-          port = 7700
-        }
-        initial_delay_seconds = 30
-        period_seconds        = 10
-        timeout_seconds       = 5
-        failure_threshold     = 3
-      }
-
-      readiness_probe {
-        http_get {
-          path = "/health"
-          port = 7700
-        }
-        initial_delay_seconds = 10
-        period_seconds        = 5
-        timeout_seconds       = 3
-        failure_threshold     = 3
-      }
     }
     
     volume {
@@ -384,11 +356,13 @@ resource "azurerm_container_app" "postgres" {
   
   secret {
     name = "postgres-password-secret"
-    key_vault_secret_id = azurerm_key_vault_secret.postgres_password.id
-    identity = "SystemAssigned"
+    value = local.postgres_password_final
   }
 
   template {
+    max_replicas = 10
+    min_replicas = 1
+    
     container {
       name   = "postgres"
       image  = "pgvector/pgvector:0.8.0-pg15-trixie"
@@ -408,25 +382,6 @@ resource "azurerm_container_app" "postgres" {
         secret_name = "postgres-password-secret"
       }
 
-      liveness_probe {
-        exec {
-          command = ["pg_isready", "-U", "myuser", "-d", "mydatabase"]
-        }
-        initial_delay_seconds = 30
-        period_seconds        = 10
-        timeout_seconds       = 5
-        failure_threshold     = 3
-      }
-
-      readiness_probe {
-        exec {
-          command = ["pg_isready", "-U", "myuser", "-d", "mydatabase"]
-        }
-        initial_delay_seconds = 10
-        period_seconds        = 5
-        timeout_seconds       = 3
-        failure_threshold     = 3
-      }
     }
     
     volume {
@@ -459,11 +414,13 @@ resource "azurerm_container_app" "rag_api" {
 
   secret {
     name = "postgres-password-secret"
-    key_vault_secret_id = azurerm_key_vault_secret.postgres_password.id
-    identity = "SystemAssigned"
+    value = local.postgres_password_final
   }
 
   template {
+    max_replicas = 10
+    min_replicas = 1
+    
     container {
       name   = "rag-api"
       image  = "ghcr.io/danny-avila/librechat-rag-api-dev-lite:latest"
@@ -472,7 +429,7 @@ resource "azurerm_container_app" "rag_api" {
       
       env {
         name  = "DB_HOST"
-        value = azurerm_container_app.postgres.latest_revision_fqdn
+        value = "bio-ai-postgres"
       }
       env {
         name  = "DB_PORT"
@@ -495,27 +452,6 @@ resource "azurerm_container_app" "rag_api" {
         value = "8000"
       }
 
-      liveness_probe {
-        http_get {
-          path = "/health"
-          port = 8000
-        }
-        initial_delay_seconds = 30
-        period_seconds        = 10
-        timeout_seconds       = 5
-        failure_threshold     = 3
-      }
-
-      readiness_probe {
-        http_get {
-          path = "/health"
-          port = 8000
-        }
-        initial_delay_seconds = 10
-        period_seconds        = 5
-        timeout_seconds       = 3
-        failure_threshold     = 3
-      }
     }
   }
 
@@ -529,7 +465,48 @@ resource "azurerm_container_app" "rag_api" {
   }
 }
 
-# STEP 12: Create LibreChat API Container App
+# STEP 12: Create LibreChat Frontend Container App
+resource "azurerm_container_app" "librechat_frontend" {
+  name                         = "bio-ai-librechat-frontend"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = azurerm_resource_group.main.name
+  revision_mode                = "Single"
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  template {
+    max_replicas = 10
+    min_replicas = 1
+    
+    container {
+      name   = "librechat-frontend"
+      image  = "ghcr.io/danny-avila/librechat:latest"
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      env {
+        name  = "NEXT_PUBLIC_API_URL"
+        value = "https://bio-ai-librechat-api--0000003.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io"
+      }
+    }
+  }
+
+  ingress {
+    allow_insecure_connections = false
+    external_enabled          = true
+    target_port               = 3000
+    transport                 = "http"
+    
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
+  }
+}
+
+# STEP 13: Create LibreChat API Container App
 resource "azurerm_container_app" "librechat_api" {
   name                         = "bio-ai-librechat-api"
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -542,20 +519,17 @@ resource "azurerm_container_app" "librechat_api" {
 
   secret {
     name = "openai-api-key-secret"
-    key_vault_secret_id = azurerm_key_vault_secret.openai_api_key.id
-    identity = "SystemAssigned"
+    value = var.openai_api_key
   }
 
   secret {
     name = "mongo-password-secret"
-    key_vault_secret_id = azurerm_key_vault_secret.mongo_password.id
-    identity = "SystemAssigned"
+    value = local.mongo_password_final
   }
 
   secret {
     name = "meili-master-key-secret"
-    key_vault_secret_id = azurerm_key_vault_secret.meili_master_key.id
-    identity = "SystemAssigned"
+    value = local.meili_master_key_final
   }
 
   template {
@@ -585,17 +559,17 @@ resource "azurerm_container_app" "librechat_api" {
       # MongoDB Configuration
       env {
         name  = "MONGO_URI"
-        value = "mongodb://admin:${local.mongo_password_final}@${azurerm_container_app.mongo.latest_revision_fqdn}:27017/LibreChat"
+        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb:27017/LibreChat"
       }
 
       # Meilisearch Configuration
       env {
         name  = "MEILI_HOST"
-        value = "http://${azurerm_container_app.meilisearch.latest_revision_fqdn}:7700"
+        value = "http://bio-ai-meilisearch:7700"
       }
       env {
         name  = "MEILI_HTTP_ADDR"
-        value = "${azurerm_container_app.meilisearch.latest_revision_fqdn}:7700"
+        value = "bio-ai-meilisearch:7700"
       }
       env {
         name        = "MEILI_MASTER_KEY"
@@ -605,7 +579,7 @@ resource "azurerm_container_app" "librechat_api" {
       # RAG API Configuration
       env {
         name  = "RAG_API_URL"
-        value = "http://${azurerm_container_app.rag_api.latest_revision_fqdn}:8000"
+        value = "http://bio-ai-rag-api:8000"
       }
 
       # OpenAI Configuration
@@ -614,14 +588,14 @@ resource "azurerm_container_app" "librechat_api" {
         secret_name = "openai-api-key-secret"
       }
 
-      # Domain Configuration
+      # Domain Configuration - wird nach dem Deployment automatisch gesetzt
       env {
         name  = "DOMAIN_CLIENT"
-        value = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+        value = "https://bio-ai-librechat-api.${azurerm_container_app_environment.main.default_domain}"
       }
       env {
         name  = "DOMAIN_SERVER"
-        value = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+        value = "https://bio-ai-librechat-api.${azurerm_container_app_environment.main.default_domain}"
       }
 
       # Additional LibreChat Configuration
@@ -642,27 +616,6 @@ resource "azurerm_container_app" "librechat_api" {
         value = "false"
       }
 
-      liveness_probe {
-        http_get {
-          path = "/api/health"
-          port = 3080
-        }
-        initial_delay_seconds = 60
-        period_seconds        = 30
-        timeout_seconds       = 10
-        failure_threshold     = 3
-      }
-
-      readiness_probe {
-        http_get {
-          path = "/api/health"
-          port = 3080
-        }
-        initial_delay_seconds = 30
-        period_seconds        = 10
-        timeout_seconds       = 5
-        failure_threshold     = 3
-      }
     }
   }
 
@@ -728,9 +681,14 @@ output "container_app_environment_name" {
   value       = azurerm_container_app_environment.main.name
 }
 
-output "librechat_url" {
-  description = "URL of the LibreChat application"
+output "librechat_api_url" {
+  description = "URL of the LibreChat API"
   value       = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
+}
+
+output "librechat_frontend_url" {
+  description = "URL of the LibreChat Frontend"
+  value       = "https://${azurerm_container_app.librechat_frontend.latest_revision_fqdn}"
 }
 
 output "storage_account_name" {
