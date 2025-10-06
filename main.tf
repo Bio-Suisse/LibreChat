@@ -465,46 +465,7 @@ resource "azurerm_container_app" "rag_api" {
   }
 }
 
-# STEP 12: Create LibreChat Frontend Container App
-resource "azurerm_container_app" "librechat_frontend" {
-  name                         = "bio-ai-librechat-frontend"
-  container_app_environment_id = azurerm_container_app_environment.main.id
-  resource_group_name          = azurerm_resource_group.main.name
-  revision_mode                = "Single"
-
-  identity {
-    type = "SystemAssigned"
-  }
-
-  template {
-    max_replicas = 10
-    min_replicas = 1
-    
-    container {
-      name   = "librechat-frontend"
-      image  = "ghcr.io/danny-avila/librechat:latest"
-      cpu    = 0.25
-      memory = "0.5Gi"
-
-      env {
-        name  = "NEXT_PUBLIC_API_URL"
-        value = "https://bio-ai-librechat-api--0000003.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io"
-      }
-    }
-  }
-
-  ingress {
-    allow_insecure_connections = false
-    external_enabled          = true
-    target_port               = 3000
-    transport                 = "http"
-    
-    traffic_weight {
-      percentage      = 100
-      latest_revision = true
-    }
-  }
-}
+# STEP 12: LibreChat Frontend is now integrated into the API container
 
 # STEP 13: Create LibreChat API Container App
 resource "azurerm_container_app" "librechat_api" {
@@ -549,7 +510,7 @@ resource "azurerm_container_app" "librechat_api" {
       }
       env {
         name  = "PORT"
-        value = "3080"
+        value = "3000"
       }
       env {
         name  = "NODE_ENV"
@@ -686,10 +647,7 @@ output "librechat_api_url" {
   value       = "https://${azurerm_container_app.librechat_api.latest_revision_fqdn}"
 }
 
-output "librechat_frontend_url" {
-  description = "URL of the LibreChat Frontend"
-  value       = "https://${azurerm_container_app.librechat_frontend.latest_revision_fqdn}"
-}
+# LibreChat Frontend is now integrated into the API container
 
 output "storage_account_name" {
   description = "Name of the storage account"
