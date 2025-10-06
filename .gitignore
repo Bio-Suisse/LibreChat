@@ -138,4 +138,11 @@ helm/**/.values.yaml
 /.tabnine/
 /.codeium
 *.local.md
+# Terraform
 /terraform.tfvars
+terraform.tfstate
+terraform.tfstate.*
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
