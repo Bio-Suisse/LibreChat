@@ -332,6 +332,7 @@ resource "azurerm_container_app" "mongo" {
   ingress {
     external_enabled = false
     target_port      = 27017
+    transport        = "tcp"  # MongoDB benötigt TCP, nicht HTTP
     traffic_weight {
       percentage = 100
       latest_revision = true
@@ -613,30 +614,31 @@ resource "azurerm_container_app" "librechat_api" {
         secret_name = "jwt-refresh-secret-secret"
       }
 
-      # MongoDB Configuration
+      # MongoDB Configuration - mit TCP-Ingress kann der Container-App-Name direkt verwendet werden
+      # Verwende authSource=admin für Authentifizierung gegen die admin-Datenbank
       env {
         name  = "MONGO_URI"
-        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb:27017/LibreChat"
+        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb:27017/LibreChat?authSource=admin&directConnection=true"
       }
 
-      # Meilisearch Configuration
+      # Meilisearch Configuration - verwende Container-App-Namen mit .internal Domain
       env {
         name  = "MEILI_HOST"
-        value = "http://bio-ai-meilisearch:7700"
+        value = "http://bio-ai-meilisearch.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:7700"
       }
       env {
         name  = "MEILI_HTTP_ADDR"
-        value = "bio-ai-meilisearch:7700"
+        value = "bio-ai-meilisearch.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:7700"
       }
       env {
         name        = "MEILI_MASTER_KEY"
         secret_name = "meili-master-key-secret"
       }
 
-      # RAG API Configuration
+      # RAG API Configuration - verwende Container-App-Namen mit .internal Domain
       env {
         name  = "RAG_API_URL"
-        value = "http://bio-ai-rag-api:8000"
+        value = "http://bio-ai-rag-api.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:8000"
       }
 
       # OpenAI Configuration
