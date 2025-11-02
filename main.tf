@@ -94,6 +94,26 @@ resource "random_password" "postgres_password" {
   special = true
 }
 
+resource "random_password" "creds_key" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "creds_iv" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "jwt_secret" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "jwt_refresh_secret" {
+  length  = 64
+  special = false
+}
+
 resource "random_id" "kv_suffix" {
   byte_length = 4
 }
@@ -232,6 +252,30 @@ resource "azurerm_key_vault_secret" "openai_api_key" {
   key_vault_id = azurerm_key_vault.main.id
 }
 
+resource "azurerm_key_vault_secret" "creds_key" {
+  name         = "creds-key"
+  value        = random_password.creds_key.result
+  key_vault_id = azurerm_key_vault.main.id
+}
+
+resource "azurerm_key_vault_secret" "creds_iv" {
+  name         = "creds-iv"
+  value        = random_password.creds_iv.result
+  key_vault_id = azurerm_key_vault.main.id
+}
+
+resource "azurerm_key_vault_secret" "jwt_secret" {
+  name         = "jwt-secret"
+  value        = random_password.jwt_secret.result
+  key_vault_id = azurerm_key_vault.main.id
+}
+
+resource "azurerm_key_vault_secret" "jwt_refresh_secret" {
+  name         = "jwt-refresh-secret"
+  value        = random_password.jwt_refresh_secret.result
+  key_vault_id = azurerm_key_vault.main.id
+}
+
 
 # =========== CONTAINER APPS DEPLOYMENT ===========
 
@@ -269,14 +313,20 @@ resource "azurerm_container_app" "mongo" {
         name        = "MONGO_INITDB_ROOT_PASSWORD"
         secret_name = "mongo-root-password"
       }
-
+      # Volume-Mount temporär entfernt wegen Berechtigungsproblemen mit Azure File Storage
+      # TODO: Später wieder hinzufügen mit korrekten Berechtigungen
+      # volume_mounts {
+      #   name = "mongo-data"
+      #   path = "/data/db"
+      # }
     }
     
-    volume {
-      name         = "mongo-data"
-      storage_type = "AzureFile"
-      storage_name = azurerm_storage_share.mongo_data.name
-    }
+    # Volume temporär entfernt - MongoDB verwendet temporären Speicher
+    # volume {
+    #   name         = "mongo-data"
+    #   storage_type = "AzureFile"
+    #   storage_name = azurerm_storage_share.mongo_data.name
+    # }
   }
 
   ingress {
@@ -324,6 +374,10 @@ resource "azurerm_container_app" "meilisearch" {
         secret_name = "meili-master-key-secret"
       }
 
+      volume_mounts {
+        name = "meili-data"
+        path = "/meili_data"
+      }
     }
     
     volume {
@@ -382,6 +436,10 @@ resource "azurerm_container_app" "postgres" {
         secret_name = "postgres-password-secret"
       }
 
+      volume_mounts {
+        name = "postgres-data"
+        path = "/var/lib/postgresql/data"
+      }
     }
     
     volume {
@@ -493,6 +551,26 @@ resource "azurerm_container_app" "librechat_api" {
     value = local.meili_master_key_final
   }
 
+  secret {
+    name = "creds-key-secret"
+    value = random_password.creds_key.result
+  }
+
+  secret {
+    name = "creds-iv-secret"
+    value = random_password.creds_iv.result
+  }
+
+  secret {
+    name = "jwt-secret-secret"
+    value = random_password.jwt_secret.result
+  }
+
+  secret {
+    name = "jwt-refresh-secret-secret"
+    value = random_password.jwt_refresh_secret.result
+  }
+
   template {
     min_replicas = 1
     max_replicas = 3
@@ -510,11 +588,29 @@ resource "azurerm_container_app" "librechat_api" {
       }
       env {
         name  = "PORT"
-        value = "3000"
+        value = "3080"
       }
       env {
         name  = "NODE_ENV"
         value = "production"
+      }
+
+      # LibreChat Required Secrets
+      env {
+        name        = "CREDS_KEY"
+        secret_name = "creds-key-secret"
+      }
+      env {
+        name        = "CREDS_IV"
+        secret_name = "creds-iv-secret"
+      }
+      env {
+        name        = "JWT_SECRET"
+        secret_name = "jwt-secret-secret"
+      }
+      env {
+        name        = "JWT_REFRESH_SECRET"
+        secret_name = "jwt-refresh-secret-secret"
       }
 
       # MongoDB Configuration
