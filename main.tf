@@ -179,6 +179,15 @@ resource "azurerm_container_app_environment_storage" "meili_data" {
   access_mode                  = "ReadWrite"
 }
 
+resource "azurerm_container_app_environment_storage" "librechat_config" {
+  name                         = "librechat-config"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  account_name                 = azurerm_storage_account.main.name
+  share_name                   = azurerm_storage_share.librechat_config.name
+  access_key                   = azurerm_storage_account.main.primary_access_key
+  access_mode                  = "ReadWrite"
+}
+
 # STEP 5: Create Azure Storage Account
 resource "azurerm_storage_account" "main" {
   name                     = local.storage_account_name
@@ -205,6 +214,12 @@ resource "azurerm_storage_share" "meili_data" {
   name                 = "meili-data"
   storage_account_name = azurerm_storage_account.main.name
   quota                = 5
+}
+
+resource "azurerm_storage_share" "librechat_config" {
+  name                 = "librechat-config"
+  storage_account_name = azurerm_storage_account.main.name
+  quota                = 1
 }
 
 # STEP 6: Create Azure Key Vault and Secrets
@@ -284,7 +299,7 @@ resource "azurerm_container_app" "mongo" {
   name                         = "bio-ai-mongodb"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
   
   identity {
     type = "SystemAssigned"
@@ -330,9 +345,10 @@ resource "azurerm_container_app" "mongo" {
   }
 
   ingress {
-    external_enabled = false
+    external_enabled = false  # Nur intern erreichbar innerhalb des Container App Environments
     target_port      = 27017
-    transport        = "tcp"  # MongoDB benötigt TCP, nicht HTTP
+    transport        = "tcp"  # TCP für MongoDB (erfordert Custom VNET oder funktioniert intern)
+    exposed_port     = 27017
     traffic_weight {
       percentage = 100
       latest_revision = true
@@ -345,7 +361,7 @@ resource "azurerm_container_app" "meilisearch" {
   name                         = "bio-ai-meilisearch"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
 
   identity {
     type = "SystemAssigned"
@@ -403,7 +419,7 @@ resource "azurerm_container_app" "postgres" {
   name                         = "bio-ai-postgres"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
 
   identity {
     type = "SystemAssigned"
@@ -465,7 +481,7 @@ resource "azurerm_container_app" "rag_api" {
   name                         = "bio-ai-rag-api"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
 
   identity {
     type = "SystemAssigned"
@@ -474,6 +490,11 @@ resource "azurerm_container_app" "rag_api" {
   secret {
     name = "postgres-password-secret"
     value = local.postgres_password_final
+  }
+
+  secret {
+    name  = "openai-api-key-secret"
+    value = azurerm_key_vault_secret.openai_api_key.value
   }
 
   template {
@@ -510,6 +531,10 @@ resource "azurerm_container_app" "rag_api" {
         name  = "RAG_PORT"
         value = "8000"
       }
+      env {
+        name        = "OPENAI_API_KEY"
+        secret_name = "openai-api-key-secret"
+      }
 
     }
   }
@@ -531,7 +556,7 @@ resource "azurerm_container_app" "librechat_api" {
   name                         = "bio-ai-librechat-api"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = azurerm_resource_group.main.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
 
   identity {
     type = "SystemAssigned"
@@ -614,11 +639,29 @@ resource "azurerm_container_app" "librechat_api" {
         secret_name = "jwt-refresh-secret-secret"
       }
 
-      # MongoDB Configuration - mit TCP-Ingress kann der Container-App-Name direkt verwendet werden
+      # MongoDB Configuration - verwende internen FQDN für stabile DNS-Auflösung
       # Verwende authSource=admin für Authentifizierung gegen die admin-Datenbank
+      # Erhöhte Timeouts für Azure Container Apps Netzwerk-Latenz
       env {
         name  = "MONGO_URI"
-        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb:27017/LibreChat?authSource=admin&directConnection=true"
+        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:27017/LibreChat?authSource=admin&serverSelectionTimeoutMS=60000&connectTimeoutMS=60000&socketTimeoutMS=60000&maxPoolSize=10&minPoolSize=2"
+      }
+      # MongoDB Connection Pool Optimierung
+      env {
+        name  = "MONGO_MAX_POOL_SIZE"
+        value = "10"
+      }
+      env {
+        name  = "MONGO_MIN_POOL_SIZE"
+        value = "2"
+      }
+      env {
+        name  = "MONGO_MAX_IDLE_TIME_MS"
+        value = "30000"
+      }
+      env {
+        name  = "MONGO_WAIT_QUEUE_TIMEOUT_MS"
+        value = "60000"
       }
 
       # Meilisearch Configuration - verwende Container-App-Namen mit .internal Domain
@@ -675,6 +718,24 @@ resource "azurerm_container_app" "librechat_api" {
         value = "false"
       }
 
+      # Konfigurationspfad für librechat.yaml - Datei liegt im gemounteten Volume
+      env {
+        name  = "CONFIG_PATH"
+        value = "/app/config/librechat.yaml"
+      }
+
+      # Volume Mount für librechat.yaml Konfigurationsdatei
+      # Das Volume wird als Verzeichnis gemountet, die Datei muss als librechat.yaml im Share liegen
+      volume_mounts {
+        name = "librechat-config"
+        path = "/app/config"
+      }
+    }
+
+    volume {
+      name         = "librechat-config"
+      storage_type = "AzureFile"
+      storage_name = azurerm_storage_share.librechat_config.name
     }
   }
 
