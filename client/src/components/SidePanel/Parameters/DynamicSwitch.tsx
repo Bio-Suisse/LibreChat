@@ -50,13 +50,13 @@ function DynamicSwitch({
           <div className="flex justify-between">
             <Label
               htmlFor={`${settingKey}-dynamic-switch`}
-              className="break-words text-left text-sm font-medium"
+              className="break-words text-left text-xs font-medium"
             >
               {labelCode ? (localize(label as TranslationKeys) ?? label) : label || settingKey}{' '}
               {showDefault && (
                 <small className="opacity-40">
                   ({localize('com_endpoint_default')}:{' '}
-                  {defaultValue != null ? 'com_ui_on' : 'com_ui_off'})
+                  {defaultValue != null ? localize('com_ui_on') : localize('com_ui_off')})
                 </small>
               )}
             </Label>

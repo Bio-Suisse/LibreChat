@@ -10,33 +10,35 @@ import store from '~/store';
 const toggleSwitchConfigs = [
   {
     stateAtom: store.enableUserMsgMarkdown,
-    localizationKey: 'com_nav_user_msg_markdown',
+    localizationKey: 'com_nav_user_msg_markdown' as const,
     switchId: 'enableUserMsgMarkdown',
     hoverCardText: undefined,
     key: 'enableUserMsgMarkdown',
   },
   {
     stateAtom: store.autoScroll,
-    localizationKey: 'com_nav_auto_scroll',
+    localizationKey: 'com_nav_auto_scroll' as const,
     switchId: 'autoScroll',
     hoverCardText: undefined,
     key: 'autoScroll',
   },
   {
-    stateAtom: store.hideSidePanel,
-    localizationKey: 'com_nav_hide_panel',
-    switchId: 'hideSidePanel',
+    stateAtom: store.keepScreenAwake,
+    localizationKey: 'com_nav_keep_screen_awake' as const,
+    switchId: 'keepScreenAwake',
     hoverCardText: undefined,
-    key: 'hideSidePanel',
+    key: 'keepScreenAwake',
   },
 ];
 
 export const ThemeSelector = ({
   theme,
   onChange,
+  portal = true,
 }: {
   theme: string;
   onChange: (value: string) => void;
+  portal?: boolean;
 }) => {
   const localize = useLocalize();
 
@@ -60,6 +62,7 @@ export const ThemeSelector = ({
         testId="theme-selector"
         className="z-50"
         aria-labelledby={labelId}
+        portal={portal}
       />
     </div>
   );
@@ -68,9 +71,11 @@ export const ThemeSelector = ({
 export const LangSelector = ({
   langcode,
   onChange,
+  portal = true,
 }: {
   langcode: string;
   onChange: (value: string) => void;
+  portal?: boolean;
 }) => {
   const localize = useLocalize();
 
@@ -91,17 +96,21 @@ export const LangSelector = ({
     { value: 'he-HE', label: localize('com_nav_lang_hebrew') },
     { value: 'hu-HU', label: localize('com_nav_lang_hungarian') },
     { value: 'hy-AM', label: localize('com_nav_lang_armenian') },
+    { value: 'is', label: localize('com_nav_lang_icelandic') },
     { value: 'it-IT', label: localize('com_nav_lang_italian') },
     { value: 'nb', label: localize('com_nav_lang_norwegian_bokmal') },
+    { value: 'nn', label: localize('com_nav_lang_norwegian_nynorsk') },
     { value: 'pl-PL', label: localize('com_nav_lang_polish') },
     { value: 'pt-BR', label: localize('com_nav_lang_brazilian_portuguese') },
     { value: 'pt-PT', label: localize('com_nav_lang_portuguese') },
     { value: 'ru-RU', label: localize('com_nav_lang_russian') },
+    { value: 'sk', label: localize('com_nav_lang_slovak') },
     { value: 'ja-JP', label: localize('com_nav_lang_japanese') },
     { value: 'ka-GE', label: localize('com_nav_lang_georgian') },
     { value: 'cs-CZ', label: localize('com_nav_lang_czech') },
     { value: 'sv-SE', label: localize('com_nav_lang_swedish') },
     { value: 'ko-KR', label: localize('com_nav_lang_korean') },
+    { value: 'lt-LT', label: localize('com_nav_lang_lithuanian') },
     { value: 'lv-LV', label: localize('com_nav_lang_latvian') },
     { value: 'vi-VN', label: localize('com_nav_lang_vietnamese') },
     { value: 'th-TH', label: localize('com_nav_lang_thai') },
@@ -124,10 +133,11 @@ export const LangSelector = ({
       <Dropdown
         value={langcode}
         onChange={onChange}
-        sizeClasses="[--anchor-max-height:256px]"
+        sizeClasses="[--anchor-max-height:256px] max-h-[60vh]"
         options={languageOptions}
         className="z-50"
         aria-labelledby={labelId}
+        portal={portal}
       />
     </div>
   );

@@ -16,6 +16,11 @@ async function updateMCPServerTools({ userId, serverName, tools }) {
     const serverTools = {};
     const mcpDelimiter = Constants.mcp_delimiter;
 
+    if (tools == null || tools.length === 0) {
+      logger.debug(`[MCP Cache] No tools to update for server ${serverName} (user: ${userId})`);
+      return serverTools;
+    }
+
     for (const tool of tools) {
       const name = `${tool.name}${mcpDelimiter}${serverName}`;
       serverTools[name] = {
@@ -30,7 +35,7 @@ async function updateMCPServerTools({ userId, serverName, tools }) {
 
     await setCachedTools(serverTools, { userId, serverName });
 
-    const cache = getLogStores(CacheKeys.CONFIG_STORE);
+    const cache = getLogStores(CacheKeys.TOOL_CACHE);
     await cache.delete(CacheKeys.TOOLS);
     logger.debug(
       `[MCP Cache] Updated ${tools.length} tools for server ${serverName} (user: ${userId})`,
@@ -56,7 +61,7 @@ async function mergeAppTools(appTools) {
     const cachedTools = await getCachedTools();
     const mergedTools = { ...cachedTools, ...appTools };
     await setCachedTools(mergedTools);
-    const cache = getLogStores(CacheKeys.CONFIG_STORE);
+    const cache = getLogStores(CacheKeys.TOOL_CACHE);
     await cache.delete(CacheKeys.TOOLS);
     logger.debug(`Merged ${count} app-level tools`);
   } catch (error) {

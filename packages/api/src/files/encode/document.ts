@@ -1,25 +1,38 @@
 import { Providers } from '@librechat/agents';
-import { isOpenAILikeProvider, isDocumentSupportedProvider } from 'librechat-data-provider';
+import {
+  isOpenAILikeProvider,
+  isBedrockDocumentType,
+  bedrockDocumentFormats,
+  isDocumentSupportedProvider,
+} from 'librechat-data-provider';
 import type { IMongoFile } from '@librechat/data-schemas';
-import type { Request } from 'express';
-import type { StrategyFunctions, DocumentResult, AnthropicDocumentBlock } from '~/types/files';
-import { validatePdf } from '~/files/validation';
-import { getFileStream } from './utils';
+import type {
+  AnthropicDocumentBlock,
+  StrategyFunctions,
+  DocumentResult,
+  ServerRequest,
+} from '~/types';
+import { validatePdf, validateBedrockDocument } from '~/files/validation';
+import { getFileStream, getConfiguredFileSizeLimit } from './utils';
 
 /**
  * Processes and encodes document files for various providers
  * @param req - Express request object
  * @param files - Array of file objects to process
- * @param provider - The provider name
+ * @param params - Object containing provider, endpoint, and other options
+ * @param params.provider - The provider name
+ * @param params.endpoint - Optional endpoint name for file config lookup
+ * @param params.useResponsesApi - Whether to use responses API format
  * @param getStrategyFunctions - Function to get strategy functions
  * @returns Promise that resolves to documents and file metadata
  */
 export async function encodeAndFormatDocuments(
-  req: Request,
+  req: ServerRequest,
   files: IMongoFile[],
-  { provider, useResponsesApi }: { provider: Providers; useResponsesApi?: boolean },
+  params: { provider: Providers; endpoint?: string; useResponsesApi?: boolean },
   getStrategyFunctions: (source: string) => StrategyFunctions,
 ): Promise<DocumentResult> {
+  const { provider, endpoint, useResponsesApi } = params;
   if (!files?.length) {
     return { documents: [], files: [] };
   }
@@ -27,9 +40,15 @@ export async function encodeAndFormatDocuments(
   const encodingMethods: Record<string, StrategyFunctions> = {};
   const result: DocumentResult = { documents: [], files: [] };
 
-  const documentFiles = files.filter(
-    (file) => file.type === 'application/pdf' || file.type?.startsWith('application/'),
-  );
+  const isBedrock = provider === Providers.BEDROCK;
+  const isDocSupported = isDocumentSupportedProvider(provider);
+
+  const documentFiles = files.filter((file) => {
+    if (isBedrock && isBedrockDocumentType(file.type)) {
+      return true;
+    }
+    return file.type === 'application/pdf' || file.type?.startsWith('application/');
+  });
 
   if (!documentFiles.length) {
     return result;
@@ -37,7 +56,10 @@ export async function encodeAndFormatDocuments(
 
   const results = await Promise.allSettled(
     documentFiles.map((file) => {
-      if (file.type !== 'application/pdf' || !isDocumentSupportedProvider(provider)) {
+      const isProcessable = isBedrock
+        ? isBedrockDocumentType(file.type)
+        : file.type === 'application/pdf' && isDocSupported;
+      if (!isProcessable) {
         return Promise.resolve(null);
       }
       return getFileStream(req, file, encodingMethods, getStrategyFunctions);
@@ -60,9 +82,47 @@ export async function encodeAndFormatDocuments(
       continue;
     }
 
-    if (file.type === 'application/pdf' && isDocumentSupportedProvider(provider)) {
+    const configuredFileSizeLimit = getConfiguredFileSizeLimit(req, { provider, endpoint });
+    const mimeType = file.type ?? '';
+
+    if (isBedrock && isBedrockDocumentType(mimeType)) {
+      const fileBuffer = Buffer.from(content, 'base64');
+      const format = bedrockDocumentFormats[mimeType];
+
+      const validation = await validateBedrockDocument(
+        fileBuffer.length,
+        mimeType,
+        fileBuffer,
+        configuredFileSizeLimit,
+      );
+
+      if (!validation.isValid) {
+        throw new Error(`Document validation failed: ${validation.error}`);
+      }
+
+      const sanitizedName = (file.filename || 'document')
+        .replace(/[^a-zA-Z0-9\s\-()[\]]/g, '_')
+        .slice(0, 200);
+      result.documents.push({
+        type: 'document',
+        document: {
+          name: sanitizedName,
+          format,
+          source: {
+            bytes: fileBuffer,
+          },
+        },
+      });
+      result.files.push(metadata);
+    } else if (file.type === 'application/pdf' && isDocSupported) {
       const pdfBuffer = Buffer.from(content, 'base64');
-      const validation = await validatePdf(pdfBuffer, pdfBuffer.length, provider);
+
+      const validation = await validatePdf(
+        pdfBuffer,
+        pdfBuffer.length,
+        provider,
+        configuredFileSizeLimit,
+      );
 
       if (!validation.isValid) {
         throw new Error(`PDF validation failed: ${validation.error}`);
@@ -92,7 +152,7 @@ export async function encodeAndFormatDocuments(
         });
       } else if (provider === Providers.GOOGLE || provider === Providers.VERTEXAI) {
         result.documents.push({
-          type: 'document',
+          type: 'media',
           mimeType: 'application/pdf',
           data: content,
         });

@@ -1,18 +1,10 @@
 const express = require('express');
 const { logger } = require('@librechat/data-schemas');
 const { isEnabled, getBalanceConfig } = require('@librechat/api');
-const {
-  Constants,
-  CacheKeys,
-  removeNullishValues,
-  defaultSocialLogins,
-} = require('librechat-data-provider');
+const { CacheKeys, defaultSocialLogins } = require('librechat-data-provider');
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getAppConfig } = require('~/server/services/Config/app');
-const { getProjectByName } = require('~/models/Project');
-const { getMCPManager } = require('~/config');
 const { getLogStores } = require('~/cache');
-const { mcpServersRegistry } = require('@librechat/api');
 
 const router = express.Router();
 const emailLoginEnabled =
@@ -23,9 +15,7 @@ const sharedLinksEnabled =
   process.env.ALLOW_SHARED_LINKS === undefined || isEnabled(process.env.ALLOW_SHARED_LINKS);
 
 const publicSharedLinksEnabled =
-  sharedLinksEnabled &&
-  (process.env.ALLOW_SHARED_LINKS_PUBLIC === undefined ||
-    isEnabled(process.env.ALLOW_SHARED_LINKS_PUBLIC));
+  sharedLinksEnabled && isEnabled(process.env.ALLOW_SHARED_LINKS_PUBLIC);
 
 const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILEPICKER);
 const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
@@ -43,8 +33,6 @@ router.get('/', async function (req, res) {
     const today = new Date();
     return today.getMonth() === 1 && today.getDate() === 11;
   };
-
-  const instanceProject = await getProjectByName(Constants.GLOBAL_PROJECT_NAME, '_id');
 
   const ldap = getLdapConfig();
 
@@ -108,7 +96,6 @@ router.get('/', async function (req, res) {
       sharedLinksEnabled,
       publicSharedLinksEnabled,
       analyticsGtmId: process.env.ANALYTICS_GTM_ID,
-      instanceProjectId: instanceProject._id.toString(),
       bundlerURL: process.env.SANDPACK_BUNDLER_URL,
       staticBundlerURL: process.env.SANDPACK_STATIC_BUNDLER_URL,
       sharePointFilePickerEnabled,
@@ -126,35 +113,6 @@ router.get('/', async function (req, res) {
       payload.minPasswordLength = minPasswordLength;
     }
 
-    const getMCPServers = async () => {
-      try {
-        if (appConfig?.mcpConfig == null) {
-          return;
-        }
-        const mcpManager = getMCPManager();
-        if (!mcpManager) {
-          return;
-        }
-        const mcpServers = await mcpServersRegistry.getAllServerConfigs();
-        if (!mcpServers) return;
-        for (const serverName in mcpServers) {
-          if (!payload.mcpServers) {
-            payload.mcpServers = {};
-          }
-          const serverConfig = mcpServers[serverName];
-          payload.mcpServers[serverName] = removeNullishValues({
-            startup: serverConfig?.startup,
-            chatMenu: serverConfig?.chatMenu,
-            isOAuth: serverConfig.requiresOAuth,
-            customUserVars: serverConfig?.customUserVars,
-          });
-        }
-      } catch (error) {
-        logger.error('Error loading MCP servers', error);
-      }
-    };
-
-    await getMCPServers();
     const webSearchConfig = appConfig?.webSearch;
     if (
       webSearchConfig != null &&
