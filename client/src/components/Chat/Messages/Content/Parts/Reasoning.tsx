@@ -1,11 +1,11 @@
-import { memo, useMemo, useState, useCallback } from 'react';
-import { useAtom } from 'jotai';
-import type { MouseEvent } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useId } from 'react';
+import { useAtomValue } from 'jotai';
 import { ContentTypes } from 'librechat-data-provider';
-import { ThinkingContent, ThinkingButton } from './Thinking';
+import type { MouseEvent, FocusEvent } from 'react';
+import { ThinkingContent, ThinkingButton, FloatingThinkingBar } from './Thinking';
+import { useLocalize, useExpandCollapse } from '~/hooks';
 import { showThinkingAtom } from '~/store/showThinking';
 import { useMessageContext } from '~/Providers';
-import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
 type ReasoningProps = {
@@ -36,9 +36,13 @@ type ReasoningProps = {
  * For legacy text-based messages, see Thinking.tsx component.
  */
 const Reasoning = memo(({ reasoning, isLast }: ReasoningProps) => {
+  const contentId = useId();
   const localize = useLocalize();
-  const [showThinking] = useAtom(showThinkingAtom);
+  const showThinking = useAtomValue(showThinkingAtom);
   const [isExpanded, setIsExpanded] = useState(showThinking);
+  const [isBarVisible, setIsBarVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { style: expandStyle, ref: expandRef } = useExpandCollapse(isExpanded);
   const { isSubmitting, isLatestMessage, nextType } = useMessageContext();
 
   // Strip <think> tags from the reasoning content (modern format)
@@ -54,6 +58,26 @@ const Reasoning = memo(({ reasoning, isLast }: ReasoningProps) => {
     setIsExpanded((prev) => !prev);
   }, []);
 
+  const handleFocus = useCallback(() => {
+    setIsBarVisible(true);
+  }, []);
+
+  const handleBlur = useCallback((e: FocusEvent) => {
+    if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+      setIsBarVisible(false);
+    }
+  }, []);
+
+  const handleMouseEnter = useCallback(() => {
+    setIsBarVisible(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!containerRef.current?.contains(document.activeElement)) {
+      setIsBarVisible(false);
+    }
+  }, []);
+
   const effectiveIsSubmitting = isLatestMessage ? isSubmitting : false;
 
   const label = useMemo(
@@ -67,26 +91,42 @@ const Reasoning = memo(({ reasoning, isLast }: ReasoningProps) => {
   }
 
   return (
-    <div className="group/reasoning">
-      <div className="sticky top-0 z-10 mb-2 bg-surface-secondary pb-2 pt-2">
-        <ThinkingButton
-          isExpanded={isExpanded}
-          onClick={handleClick}
-          label={label}
-          content={reasoningText}
-        />
-      </div>
-      <div
-        className={cn(
-          'grid transition-all duration-300 ease-out',
-          nextType !== ContentTypes.THINK && isExpanded && 'mb-4',
-        )}
-        style={{
-          gridTemplateRows: isExpanded ? '1fr' : '0fr',
-        }}
-      >
-        <div className="overflow-hidden">
-          <ThinkingContent>{reasoningText}</ThinkingContent>
+    <div
+      ref={containerRef}
+      className="group/reasoning"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+    >
+      <div className="group/thinking-container">
+        <div className="mb-2 pb-2 pt-2">
+          <ThinkingButton
+            isExpanded={isExpanded}
+            onClick={handleClick}
+            label={label}
+            content={reasoningText}
+            contentId={contentId}
+          />
+        </div>
+        <div
+          id={contentId}
+          role="group"
+          aria-label={label}
+          aria-hidden={!isExpanded || undefined}
+          className={cn(nextType !== ContentTypes.THINK && isExpanded && 'mb-4')}
+          style={expandStyle}
+        >
+          <div className="relative overflow-hidden" ref={expandRef}>
+            <ThinkingContent>{reasoningText}</ThinkingContent>
+            <FloatingThinkingBar
+              isVisible={isBarVisible && isExpanded}
+              isExpanded={isExpanded}
+              onClick={handleClick}
+              content={reasoningText}
+              contentId={contentId}
+            />
+          </div>
         </div>
       </div>
     </div>
