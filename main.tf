@@ -316,7 +316,7 @@ resource "azurerm_container_app" "mongo" {
     
     container {
       name   = "mongodb"
-      image  = "mongo:latest"
+      image  = "mongo:8.0.20"
       cpu    = 0.25
       memory = "0.5Gi"
 
@@ -639,12 +639,10 @@ resource "azurerm_container_app" "librechat_api" {
         secret_name = "jwt-refresh-secret-secret"
       }
 
-      # MongoDB Configuration - verwende internen FQDN für stabile DNS-Auflösung
-      # Verwende authSource=admin für Authentifizierung gegen die admin-Datenbank
-      # Erhöhte Timeouts für Azure Container Apps Netzwerk-Latenz
+      # MongoDB Configuration
       env {
         name  = "MONGO_URI"
-        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:27017/LibreChat?authSource=admin&serverSelectionTimeoutMS=60000&connectTimeoutMS=60000&socketTimeoutMS=60000&maxPoolSize=10&minPoolSize=2"
+        value = "mongodb://admin:${local.mongo_password_final}@bio-ai-mongodb.internal.${azurerm_container_app_environment.main.default_domain}:27017/LibreChat?authSource=admin&serverSelectionTimeoutMS=60000&connectTimeoutMS=60000&socketTimeoutMS=60000&maxPoolSize=10&minPoolSize=2"
       }
       # MongoDB Connection Pool Optimierung
       env {
@@ -664,24 +662,24 @@ resource "azurerm_container_app" "librechat_api" {
         value = "60000"
       }
 
-      # Meilisearch Configuration - verwende Container-App-Namen mit .internal Domain
+      # Meilisearch Configuration
       env {
         name  = "MEILI_HOST"
-        value = "http://bio-ai-meilisearch.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:7700"
+        value = "http://bio-ai-meilisearch.internal.${azurerm_container_app_environment.main.default_domain}:7700"
       }
       env {
         name  = "MEILI_HTTP_ADDR"
-        value = "bio-ai-meilisearch.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:7700"
+        value = "bio-ai-meilisearch.internal.${azurerm_container_app_environment.main.default_domain}:7700"
       }
       env {
         name        = "MEILI_MASTER_KEY"
         secret_name = "meili-master-key-secret"
       }
 
-      # RAG API Configuration - verwende Container-App-Namen mit .internal Domain
+      # RAG API Configuration
       env {
         name  = "RAG_API_URL"
-        value = "http://bio-ai-rag-api.internal.livelyflower-4f84a8ae.switzerlandnorth.azurecontainerapps.io:8000"
+        value = "http://bio-ai-rag-api.internal.${azurerm_container_app_environment.main.default_domain}:8000"
       }
 
       # OpenAI Configuration
